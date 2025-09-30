@@ -22,6 +22,14 @@ enum OrderStatus {
   DELIVERED
   CANCELLED
 }
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
+}
+
 
 model User {
   id           String    @id @default(cuid())
@@ -33,14 +41,8 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   orders       Order[]
-}
 
-model Category {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  products  Product[]
+  @@index([role]) // quick filtering on role
 }
 
 model Product {
@@ -48,7 +50,7 @@ model Product {
   name        String
   description String?
   priceCents  Int
-  taxRatePct  Int           @default(10) // default tax 10%
+  taxRatePct  Int           @default(10)
   stock       Int           @default(0)
   isActive    Boolean       @default(true)
   createdAt   DateTime      @default(now())
@@ -57,8 +59,10 @@ model Product {
   category    Category?     @relation(fields: [categoryId], references: [id])
   orderItems  OrderItem[]
 
-  @@index([name])
+  @@index([name]) // good for LIKE queries (but GIN index is better for full text)
   @@index([categoryId])
+  @@index([isActive]) // common filter
+  @@index([createdAt]) // for sorting/recent products
 }
 
 model Order {
@@ -73,19 +77,23 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([createdAt]) // recent orders
+  @@index([userId, status]) // frequent combined filter
 }
 
 model OrderItem {
-  id         String  @id @default(cuid())
-  orderId    String
-  productId  String
-  quantity   Int
+  id            String  @id @default(cuid())
+  orderId       String
+  productId     String
+  quantity      Int
   unitPriceCents Int
-  taxRatePct Int
+  taxRatePct    Int
 
   order      Order   @relation(fields: [orderId], references: [id])
   product    Product @relation(fields: [productId], references: [id])
 
   @@unique([orderId, productId])
   @@index([productId])
+  @@index([orderId])
 }
+

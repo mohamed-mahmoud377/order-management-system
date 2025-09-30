@@ -3,6 +3,7 @@ import { PrismaService } from '../database/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { QueryProductsDto } from './dto/query-products.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class ProductsService {
@@ -36,9 +37,9 @@ export class ProductsService {
   }
 
   async search(query: QueryProductsDto) {
-    const where: any = { isActive: true };
-    if (query.search) where.name = { contains: query.search, mode: 'insensitive' };
-    if (query.categoryId) where.categoryId = query.categoryId;
+    // Base filters
+    const baseWhere: any = { isActive: true };
+    if (query.categoryId) baseWhere.categoryId = query.categoryId;
 
     const { skip, take, orderBy, page, limit } = (await import('../common/utils/pagination.util')).buildPagination(
       query,
@@ -46,9 +47,45 @@ export class ProductsService {
       { field: 'createdAt', order: 'desc' },
     );
 
+    //use full-text search to use the GIN index
+    if (query.search && query.search.trim().length > 0) {
+      const conditions: any[] = [
+        Prisma.sql`p."isActive" = true`,
+        Prisma.sql`to_tsvector('english', p."name" || ' ' || coalesce(p."description", '')) @@ plainto_tsquery('english', ${
+          query.search
+        })`,
+      ];
+      if (query.categoryId) conditions.push(Prisma.sql`p."categoryId" = ${query.categoryId}`);
+
+      // @ts-ignore
+        const whereSql = Prisma.sql`${Prisma.join(conditions, Prisma.raw(' AND '))}`;
+
+      const items = await this.prisma.$queryRaw<any[]>`
+        SELECT p.*,
+               ts_rank(
+                 to_tsvector('english', p."name" || ' ' || coalesce(p."description", '')),
+                 plainto_tsquery('english', ${query.search})
+               ) AS rank
+        FROM "Product" p
+        WHERE ${whereSql}
+        ORDER BY rank DESC, p."createdAt" DESC
+        LIMIT ${take} OFFSET ${skip}
+      `;
+
+      const totalRows = await this.prisma.$queryRaw<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count
+        FROM "Product" p
+        WHERE ${whereSql}
+      `;
+      const total = totalRows[0]?.count ?? 0;
+
+      return { items, total, skip, take, page, limit };
+    }
+
+    // Fallback to simple filtering when there's no search term
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.product.findMany({ where, skip, take, orderBy }),
-      this.prisma.product.count({ where }),
+      this.prisma.product.findMany({ where: baseWhere, skip, take, orderBy }),
+      this.prisma.product.count({ where: baseWhere }),
     ]);
 
     return { items, total, skip, take, page, limit };
